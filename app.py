@@ -11,10 +11,16 @@ CORS(app)
 
 W, H = A4
 SESSIONS_DIR = '/tmp/prevamceo_sessions'
+SIGNATURES_DIR = '/tmp/prevamceo_signatures'
 os.makedirs(SESSIONS_DIR, exist_ok=True)
+os.makedirs(SIGNATURES_DIR, exist_ok=True)
 
 def get_session_path(session_id):
     return os.path.join(SESSIONS_DIR, f'{session_id}.json')
+
+def get_sig_path(session_id, nom, prenom):
+    key = f"{session_id}_{nom}_{prenom}".replace(' ', '_')
+    return os.path.join(SIGNATURES_DIR, f'{key}.json')
 
 def load_session(session_id):
     path = get_session_path(session_id)
@@ -28,6 +34,18 @@ def save_session(session_id, data):
     with open(path, 'w') as f:
         json.dump(data, f)
 
+def load_signature(session_id, nom, prenom):
+    path = get_sig_path(session_id, nom, prenom)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        return json.load(f).get('signature')
+
+def save_signature(session_id, nom, prenom, signature):
+    path = get_sig_path(session_id, nom, prenom)
+    with open(path, 'w') as f:
+        json.dump({'signature': signature}, f)
+
 def b64_to_image(b64_str):
     if not b64_str:
         return None
@@ -36,7 +54,22 @@ def b64_to_image(b64_str):
     img_data = base64.b64decode(b64_str)
     return Image.open(io.BytesIO(img_data)).convert('RGBA')
 
-def generer_pdf(data, sig_formateur=None):
+def dessiner_signature(c, b64_str, x, y, w, h):
+    """Dessine une signature base64 sur le canvas PDF."""
+    try:
+        sig_img = b64_to_image(b64_str)
+        if sig_img:
+            sig_buffer = io.BytesIO()
+            sig_img.save(sig_buffer, format='PNG')
+            sig_buffer.seek(0)
+            c.drawImage(sig_buffer, x, y, width=w, height=h,
+                       preserveAspectRatio=True, mask='auto')
+            return True
+    except Exception as e:
+        print(f"Erreur signature: {e}")
+    return False
+
+def generer_pdf(data, sig_formateur=None, session_id=None):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     
@@ -59,7 +92,6 @@ def generer_pdf(data, sig_formateur=None):
     col4 = cW / 4
     headers1 = ['Client', 'Titre de la formation', 'Session n°', 'Dates de formation']
     vals1 = [data.get('entreprise','—'), data.get('titre','—'), data.get('session','—'), data.get('date','—')]
-    
     for i in range(4):
         c.setFillColorRGB(0.9, 0.9, 0.9)
         c.rect(mL + i*col4, y + 8*mm, col4, 7*mm, stroke=1, fill=1)
@@ -94,7 +126,7 @@ def generer_pdf(data, sig_formateur=None):
     y -= 8*mm
     colN = cW * 0.28
     colS = cW * 0.36
-    rowH = 12*mm
+    rowH = 14*mm
 
     c.setFillColorRGB(0.92,0.92,0.92)
     c.rect(mL, y, colN, 18*mm, stroke=1, fill=1)
@@ -114,8 +146,11 @@ def generer_pdf(data, sig_formateur=None):
     y -= rowH
     participants = data.get('participants', [])
     for i, p in enumerate(participants):
-        if not p.get('nom') and not p.get('prenom'):
+        nom = p.get('nom','').strip()
+        prenom = p.get('prenom','').strip()
+        if not nom and not prenom:
             continue
+        
         fill = 0.97 if i%2==0 else 1.0
         c.setFillColorRGB(fill,fill,fill)
         c.rect(mL, y, colN, rowH, stroke=1, fill=1)
@@ -124,55 +159,53 @@ def generer_pdf(data, sig_formateur=None):
         c.rect(mL+colN+colS, y, colS, rowH, stroke=1, fill=1)
         c.setFillColorRGB(0,0,0)
         c.setFont("Helvetica", 9)
-        nom_complet = f"{p.get('prenom','')} {p.get('nom','')}".strip()
-        c.drawString(mL+2*mm, y+4.5*mm, nom_complet)
+        c.drawString(mL+2*mm, y+5*mm, f"{prenom} {nom}".strip())
 
-        # SIGNATURE STAGIAIRE
-        sig_b64 = p.get('signature', '')
-        if sig_b64:
-            try:
-                sig_img = b64_to_image(sig_b64)
-                if sig_img:
-                    sig_buffer = io.BytesIO()
-                    sig_img.save(sig_buffer, format='PNG')
-                    sig_buffer.seek(0)
-                    c.drawImage(sig_buffer, mL+colN+2*mm, y+1*mm,
-                               width=colS-4*mm, height=rowH-2*mm,
-                               preserveAspectRatio=True, mask='auto')
-            except Exception as e:
+        # Chercher signature dans fichier dédié (stockée directement par index.html)
+        sig_b64 = None
+        if session_id:
+            sig_b64 = load_signature(session_id, nom, prenom)
+        
+        # Fallback: signature dans les données JSON (tronquée)
+        if not sig_b64:
+            sig_b64 = p.get('signature', '')
+
+        if sig_b64 and len(sig_b64) > 100:
+            ok = dessiner_signature(c, sig_b64,
+                mL+colN+1*mm, y+1*mm,
+                colS-2*mm, rowH-2*mm)
+            if not ok:
                 c.setFont("Helvetica", 7)
-                c.setFillColorRGB(0.1,0.42,0.29)
-                c.drawCentredString(mL+colN+colS/2, y+4.5*mm, f"✓ Signé {p.get('heure','')}")
+                c.setFillColorRGB(0.5,0.5,0.5)
+                c.drawCentredString(mL+colN+colS/2, y+5*mm, "Erreur signature")
                 c.setFillColorRGB(0,0,0)
+        else:
+            c.setFont("Helvetica", 7)
+            c.setFillColorRGB(0.7,0.7,0.7)
+            c.drawCentredString(mL+colN+colS/2, y+5*mm, "—")
+            c.setFillColorRGB(0,0,0)
+
         y -= rowH
 
     # FORMATEUR
     c.setFillColorRGB(0.92,0.92,0.92)
-    c.rect(mL, y, colN, 18*mm, stroke=1, fill=1)
+    c.rect(mL, y, colN, 20*mm, stroke=1, fill=1)
     c.setFillColorRGB(1,1,1)
-    c.rect(mL+colN, y, colS, 18*mm, stroke=1, fill=1)
-    c.rect(mL+colN+colS, y, colS, 18*mm, stroke=1, fill=1)
+    c.rect(mL+colN, y, colS, 20*mm, stroke=1, fill=1)
+    c.rect(mL+colN+colS, y, colS, 20*mm, stroke=1, fill=1)
     c.setFillColorRGB(0,0,0)
     c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(mL+colN/2, y+13*mm, "Formateur")
+    c.drawCentredString(mL+colN/2, y+15*mm, "Formateur")
     c.setFont("Helvetica", 9)
-    c.drawCentredString(mL+colN/2, y+9*mm, str(data.get('formateur',''))[:22])
+    c.drawCentredString(mL+colN/2, y+10*mm, str(data.get('formateur',''))[:22])
     c.setFont("Helvetica", 7)
     c.drawCentredString(mL+colN/2, y+5*mm, "(atteste avoir animé la formation)")
 
     # SIGNATURE FORMATEUR
-    if sig_formateur:
-        try:
-            sig_img = b64_to_image(sig_formateur)
-            if sig_img:
-                sig_buffer = io.BytesIO()
-                sig_img.save(sig_buffer, format='PNG')
-                sig_buffer.seek(0)
-                c.drawImage(sig_buffer, mL+colN+colS+2*mm, y+1*mm,
-                           width=colS-4*mm, height=16*mm,
-                           preserveAspectRatio=True, mask='auto')
-        except Exception as e:
-            print(f"Erreur signature formateur: {e}")
+    if sig_formateur and len(sig_formateur) > 100:
+        dessiner_signature(c, sig_formateur,
+            mL+colN+colS+1*mm, y+1*mm,
+            colS-2*mm, 18*mm)
 
     # FOOTER
     c.setFont("Helvetica", 6)
@@ -188,23 +221,37 @@ def generer_pdf(data, sig_formateur=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v3 - fichiers JSON'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v4 - signatures directes'})
+
+@app.route('/stocker-signature', methods=['POST'])
+def stocker_signature():
+    """
+    Reçoit la signature directement depuis index.html (bypass Make.com).
+    Body JSON: { session_id, nom, prenom, signature }
+    """
+    body = request.json
+    session_id = body.get('session_id')
+    nom = body.get('nom','').strip()
+    prenom = body.get('prenom','').strip()
+    signature = body.get('signature','')
+
+    if not session_id or not signature:
+        return jsonify({'success': False, 'error': 'Données manquantes'}), 400
+
+    save_signature(session_id, nom, prenom, signature)
+    return jsonify({'success': True, 'message': f'Signature de {prenom} {nom} stockée'})
 
 @app.route('/creer-session', methods=['POST'])
 def creer_session():
     data = request.json
     session_id = str(uuid.uuid4())[:8]
-    
-    # Sauvegarder sur disque (persiste entre redémarrages)
     save_session(session_id, {
         'data': data,
         'signature_formateur': None,
         'cree_le': time.time()
     })
-    
     base_url = request.host_url.rstrip('/')
     lien_signature = f"{base_url}/signer/{session_id}"
-    
     return jsonify({
         'session_id': session_id,
         'lien_signature': lien_signature,
@@ -216,18 +263,16 @@ def page_signature(session_id):
     session = load_session(session_id)
     if not session:
         return "Session expirée ou introuvable.", 404
-    
     data = session['data']
     formateur = data.get('formateur', 'Formateur')
     formation = data.get('titre', 'Formation')
     date = data.get('date', '')
     participants = data.get('participants', [])
-    
     liste_html = ''.join([
         f"<div class='participant'>✅ {p.get('prenom','')} {p.get('nom','')}</div>"
-        for p in participants if p.get('nom') or p.get('prenom')
+        for p in participants if p.get('nom','').strip() or p.get('prenom','').strip()
     ])
-    
+    nb = len([p for p in participants if p.get('nom','').strip() or p.get('prenom','').strip()])
     return f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -268,7 +313,7 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
   <div class="info">👤 Formateur : <strong>{formateur}</strong></div>
   <div class="info">📅 Date : <strong>{date}</strong></div>
   <br>
-  <h2>Participants ({len([p for p in participants if p.get('nom') or p.get('prenom')])})</h2>
+  <h2>Participants ({nb})</h2>
   {liste_html}
   <br>
   <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Votre signature *</div>
@@ -344,12 +389,10 @@ def soumettre_signature(session_id):
     session = load_session(session_id)
     if not session:
         return jsonify({'success': False, 'error': 'Session introuvable'}), 404
-    
     sig_formateur = request.json.get('signature_formateur')
     session['signature_formateur'] = sig_formateur
     session['signe_le'] = time.time()
     save_session(session_id, session)
-    
     return jsonify({'success': True})
 
 @app.route('/statut/<session_id>', methods=['GET'])
@@ -357,7 +400,6 @@ def statut(session_id):
     session = load_session(session_id)
     if not session:
         return jsonify({'signe': False, 'error': 'Session introuvable'})
-    
     signe = session.get('signature_formateur') is not None
     return jsonify({'signe': signe, 'session_id': session_id})
 
@@ -366,13 +408,11 @@ def telecharger_pdf_final(session_id):
     session = load_session(session_id)
     if not session:
         return jsonify({'error': 'Session introuvable'}), 404
-
     sig_formateur = session.get('signature_formateur')
     if not sig_formateur:
         return jsonify({'error': 'Formateur pas encore signé'}), 400
-
     try:
-        pdf_buffer = generer_pdf(session['data'], sig_formateur)
+        pdf_buffer = generer_pdf(session['data'], sig_formateur, session_id)
         return send_file(
             pdf_buffer,
             mimetype='application/pdf',
