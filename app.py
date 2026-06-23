@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 from reportlab.lib.units import mm
 from PIL import Image
 import base64, io, os, json, uuid, time
@@ -62,7 +63,8 @@ def dessiner_signature(c, b64_str, x, y, w, h):
             sig_buffer = io.BytesIO()
             sig_img.save(sig_buffer, format='PNG')
             sig_buffer.seek(0)
-            c.drawImage(sig_buffer, x, y, width=w, height=h,
+            img_reader = ImageReader(sig_buffer)
+            c.drawImage(img_reader, x, y, width=w, height=h,
                        preserveAspectRatio=True, mask='auto')
             return True
     except Exception as e:
@@ -206,6 +208,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
         dessiner_signature(c, sig_formateur,
             mL+colN+colS+1*mm, y+1*mm,
             colS-2*mm, 18*mm)
+
 
     # FOOTER
     c.setFont("Helvetica", 6)
