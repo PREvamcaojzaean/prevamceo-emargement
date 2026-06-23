@@ -10,9 +10,23 @@ app = Flask(__name__)
 CORS(app)
 
 W, H = A4
+SESSIONS_DIR = '/tmp/prevamceo_sessions'
+os.makedirs(SESSIONS_DIR, exist_ok=True)
 
-# Stockage temporaire des sessions (en mémoire — limitation du plan gratuit Railway)
-sessions = {}
+def get_session_path(session_id):
+    return os.path.join(SESSIONS_DIR, f'{session_id}.json')
+
+def load_session(session_id):
+    path = get_session_path(session_id)
+    if not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        return json.load(f)
+
+def save_session(session_id, data):
+    path = get_session_path(session_id)
+    with open(path, 'w') as f:
+        json.dump(data, f)
 
 def b64_to_image(b64_str):
     if not b64_str:
@@ -29,7 +43,7 @@ def generer_pdf(data, sig_formateur=None):
     mL, mR, mT = 15*mm, 15*mm, 12*mm
     cW = W - mL - mR
 
-    # ===== HEADER =====
+    # HEADER
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(W/2, H - mT - 12*mm, "Feuille de présence")
     c.setFont("Helvetica", 8)
@@ -40,16 +54,11 @@ def generer_pdf(data, sig_formateur=None):
     c.setLineWidth(0.5)
     c.rect(mL, H - mT - 28*mm, cW, 28*mm, stroke=1, fill=0)
 
-    # ===== TABLE INFOS =====
+    # TABLE INFOS
     y = H - mT - 28*mm - 16*mm
     col4 = cW / 4
     headers1 = ['Client', 'Titre de la formation', 'Session n°', 'Dates de formation']
-    vals1 = [
-        data.get('entreprise','—'),
-        data.get('titre','—'),
-        data.get('session','—'),
-        data.get('date','—')
-    ]
+    vals1 = [data.get('entreprise','—'), data.get('titre','—'), data.get('session','—'), data.get('date','—')]
     
     for i in range(4):
         c.setFillColorRGB(0.9, 0.9, 0.9)
@@ -61,18 +70,12 @@ def generer_pdf(data, sig_formateur=None):
         c.rect(mL + i*col4, y, col4, 8*mm, stroke=1, fill=1)
         c.setFillColorRGB(0,0,0)
         c.setFont("Helvetica", 8)
-        t = str(vals1[i])[:22]
-        c.drawCentredString(mL + i*col4 + col4/2, y + 3*mm, t)
+        c.drawCentredString(mL + i*col4 + col4/2, y + 3*mm, str(vals1[i])[:22])
 
-    # Ligne 2 — Adresse / Horaires / Type
     y -= 18*mm
     col3 = [cW*0.35, cW*0.30, cW*0.35]
     headers2 = ['Adresse de la formation', 'Horaires', 'Formateur']
-    vals2 = [
-        data.get('adresse','—'),
-        data.get('horaires','—'),
-        data.get('formateur','—')
-    ]
+    vals2 = [data.get('adresse','—'), data.get('horaires','—'), data.get('formateur','—')]
     x = mL
     for i in range(3):
         c.setFillColorRGB(0.9,0.9,0.9)
@@ -87,13 +90,12 @@ def generer_pdf(data, sig_formateur=None):
         c.drawCentredString(x+col3[i]/2, y+3.5*mm, str(vals2[i])[:25])
         x += col3[i]
 
-    # ===== TABLEAU EMARGEMENT =====
+    # TABLEAU EMARGEMENT
     y -= 8*mm
     colN = cW * 0.28
     colS = cW * 0.36
     rowH = 12*mm
 
-    # Header
     c.setFillColorRGB(0.92,0.92,0.92)
     c.rect(mL, y, colN, 18*mm, stroke=1, fill=1)
     c.rect(mL+colN, y, colS*2, 18*mm, stroke=1, fill=1)
@@ -109,24 +111,24 @@ def generer_pdf(data, sig_formateur=None):
     c.drawCentredString(mL+colN+colS+colS/2, y+8*mm, "Formateur")
     c.line(mL+colN+colS, y, mL+colN+colS, y+18*mm)
 
-    # Participants
     y -= rowH
     participants = data.get('participants', [])
     for i, p in enumerate(participants):
+        if not p.get('nom') and not p.get('prenom'):
+            continue
         fill = 0.97 if i%2==0 else 1.0
         c.setFillColorRGB(fill,fill,fill)
         c.rect(mL, y, colN, rowH, stroke=1, fill=1)
         c.setFillColorRGB(1,1,1)
         c.rect(mL+colN, y, colS, rowH, stroke=1, fill=1)
         c.rect(mL+colN+colS, y, colS, rowH, stroke=1, fill=1)
-        
         c.setFillColorRGB(0,0,0)
         c.setFont("Helvetica", 9)
         nom_complet = f"{p.get('prenom','')} {p.get('nom','')}".strip()
         c.drawString(mL+2*mm, y+4.5*mm, nom_complet)
 
-        # ===== SIGNATURE DU STAGIAIRE (vraie image PNG) =====
-        sig_b64 = p.get('signature', '') or p.get('signature_matin', '')
+        # SIGNATURE STAGIAIRE
+        sig_b64 = p.get('signature', '')
         if sig_b64:
             try:
                 sig_img = b64_to_image(sig_b64)
@@ -140,18 +142,11 @@ def generer_pdf(data, sig_formateur=None):
             except Exception as e:
                 c.setFont("Helvetica", 7)
                 c.setFillColorRGB(0.1,0.42,0.29)
-                heure = p.get('heure','')
-                c.drawCentredString(mL+colN+colS/2, y+4.5*mm, f"✓ Signé {heure}")
+                c.drawCentredString(mL+colN+colS/2, y+4.5*mm, f"✓ Signé {p.get('heure','')}")
                 c.setFillColorRGB(0,0,0)
-        else:
-            c.setFont("Helvetica", 7)
-            c.setFillColorRGB(0.6,0.6,0.6)
-            c.drawCentredString(mL+colN+colS/2, y+4.5*mm, "—")
-            c.setFillColorRGB(0,0,0)
-        
         y -= rowH
 
-    # ===== FORMATEUR =====
+    # FORMATEUR
     c.setFillColorRGB(0.92,0.92,0.92)
     c.rect(mL, y, colN, 18*mm, stroke=1, fill=1)
     c.setFillColorRGB(1,1,1)
@@ -165,7 +160,7 @@ def generer_pdf(data, sig_formateur=None):
     c.setFont("Helvetica", 7)
     c.drawCentredString(mL+colN/2, y+5*mm, "(atteste avoir animé la formation)")
 
-    # ===== SIGNATURE DU FORMATEUR (vraie image PNG) =====
+    # SIGNATURE FORMATEUR
     if sig_formateur:
         try:
             sig_img = b64_to_image(sig_formateur)
@@ -179,33 +174,33 @@ def generer_pdf(data, sig_formateur=None):
         except Exception as e:
             print(f"Erreur signature formateur: {e}")
 
-    # ===== FOOTER =====
+    # FOOTER
     c.setFont("Helvetica", 6)
     c.setFillColorRGB(0.3,0.3,0.3)
     fY = 18*mm
-    c.drawCentredString(W/2, fY, "Les informations recueillies sont enregistrées dans un fichier informatisé par PREVAMCEO pour traiter votre inscription en formation continue.")
-    c.drawCentredString(W/2, fY-3.5*mm, "Conformément à la loi « informatique et libertés » vous pouvez exercer votre droit d'accès en contactant jparnaud@prevamceo.fr")
-    c.drawCentredString(W/2, fY-7*mm, "Prévamcéo - 11 B allée de la Falaise - 13820 Ensuès-la-Redonne – 06 08 13 92 57 – contact@prevamceo.fr")
+    c.drawCentredString(W/2, fY, "Les informations recueillies sont enregistrées dans un fichier informatisé par PREVAMCEO.")
+    c.drawCentredString(W/2, fY-3.5*mm, "Conformément à la loi « informatique et libertés » — jparnaud@prevamceo.fr")
+    c.drawCentredString(W/2, fY-7*mm, "Prévamcéo - 11 B allée de la Falaise - 13820 Ensuès-la-Redonne – 06 08 13 92 57")
 
     c.save()
     buffer.seek(0)
     return buffer
 
-# ===== ROUTES =====
-
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v2'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v3 - fichiers JSON'})
 
 @app.route('/creer-session', methods=['POST'])
 def creer_session():
     data = request.json
     session_id = str(uuid.uuid4())[:8]
-    sessions[session_id] = {
+    
+    # Sauvegarder sur disque (persiste entre redémarrages)
+    save_session(session_id, {
         'data': data,
         'signature_formateur': None,
         'cree_le': time.time()
-    }
+    })
     
     base_url = request.host_url.rstrip('/')
     lien_signature = f"{base_url}/signer/{session_id}"
@@ -218,10 +213,10 @@ def creer_session():
 
 @app.route('/signer/<session_id>', methods=['GET'])
 def page_signature(session_id):
-    if session_id not in sessions:
+    session = load_session(session_id)
+    if not session:
         return "Session expirée ou introuvable.", 404
     
-    session = sessions[session_id]
     data = session['data']
     formateur = data.get('formateur', 'Formateur')
     formation = data.get('titre', 'Formation')
@@ -230,7 +225,7 @@ def page_signature(session_id):
     
     liste_html = ''.join([
         f"<div class='participant'>✅ {p.get('prenom','')} {p.get('nom','')}</div>"
-        for p in participants
+        for p in participants if p.get('nom') or p.get('prenom')
     ])
     
     return f"""<!DOCTYPE html>
@@ -267,14 +262,13 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
   <h1>Prévamceo — Signature formateur</h1>
   <p>Feuille de présence numérique</p>
 </div>
-
 <div class="card" id="main-card">
   <h2>Informations de la formation</h2>
   <div class="info">📋 <strong>{formation}</strong></div>
   <div class="info">👤 Formateur : <strong>{formateur}</strong></div>
   <div class="info">📅 Date : <strong>{date}</strong></div>
   <br>
-  <h2>Participants ({len(participants)})</h2>
+  <h2>Participants ({len([p for p in participants if p.get('nom') or p.get('prenom')])})</h2>
   {liste_html}
   <br>
   <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Votre signature *</div>
@@ -288,20 +282,17 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
   <div class="msg" id="msg"></div>
   <button class="btn-submit" id="btn-submit" onclick="soumettre()">✅ Valider et générer le PDF</button>
 </div>
-
 <div class="success" id="success">
   <div class="icon">✅</div>
   <h2>Signature enregistrée !</h2>
   <p style="font-size:14px;color:#555;margin-top:8px;">Le document va être généré et envoyé.<br><br>
   <span style="font-size:12px;color:#aaa;">Prévamceo — www.prevamceo.fr</span></p>
 </div>
-
 <script>
 const SESSION_ID = '{session_id}';
 const canvas = document.getElementById('sig-canvas');
 const ctx = canvas.getContext('2d');
 let hasDrawn = false, drawing = false;
-
 function resize() {{
   const w = canvas.offsetWidth;
   canvas.width = w * window.devicePixelRatio;
@@ -310,7 +301,6 @@ function resize() {{
   ctx.strokeStyle = '#1a3a5c'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
 }}
 resize(); window.addEventListener('resize', resize);
-
 const getPos = e => {{ const r=canvas.getBoundingClientRect(); const s=e.touches?e.touches[0]:e; return {{x:s.clientX-r.left,y:s.clientY-r.top}}; }};
 canvas.addEventListener('mousedown', e => {{ drawing=true; const {{x,y}}=getPos(e); ctx.beginPath(); ctx.moveTo(x,y); }});
 canvas.addEventListener('mousemove', e => {{ if(!drawing)return; hasDrawn=true; document.getElementById('sig-hint').classList.add('hidden'); const {{x,y}}=getPos(e); ctx.lineTo(x,y); ctx.stroke(); }});
@@ -319,9 +309,7 @@ canvas.addEventListener('mouseleave', ()=>drawing=false);
 canvas.addEventListener('touchstart', e=>{{e.preventDefault();drawing=true;const {{x,y}}=getPos(e);ctx.beginPath();ctx.moveTo(x,y);}},{{passive:false}});
 canvas.addEventListener('touchmove', e=>{{e.preventDefault();if(!drawing)return;hasDrawn=true;document.getElementById('sig-hint').classList.add('hidden');const {{x,y}}=getPos(e);ctx.lineTo(x,y);ctx.stroke();}},{{passive:false}});
 canvas.addEventListener('touchend', ()=>drawing=false);
-
 function clearSig() {{ ctx.clearRect(0,0,canvas.width,canvas.height); hasDrawn=false; document.getElementById('sig-hint').classList.remove('hidden'); }}
-
 async function soumettre() {{
   if (!hasDrawn) {{ document.getElementById('msg').style.display='block'; document.getElementById('msg').textContent='Veuillez signer avant de valider.'; return; }}
   const btn = document.getElementById('btn-submit');
@@ -353,36 +341,33 @@ async function soumettre() {{
 
 @app.route('/soumettre-signature/<session_id>', methods=['POST'])
 def soumettre_signature(session_id):
-    if session_id not in sessions:
+    session = load_session(session_id)
+    if not session:
         return jsonify({'success': False, 'error': 'Session introuvable'}), 404
     
     sig_formateur = request.json.get('signature_formateur')
-    sessions[session_id]['signature_formateur'] = sig_formateur
-    sessions[session_id]['signe_le'] = time.time()
+    session['signature_formateur'] = sig_formateur
+    session['signe_le'] = time.time()
+    save_session(session_id, session)
     
     return jsonify({'success': True})
 
 @app.route('/statut/<session_id>', methods=['GET'])
 def statut(session_id):
-    if session_id not in sessions:
+    session = load_session(session_id)
+    if not session:
         return jsonify({'signe': False, 'error': 'Session introuvable'})
     
-    signe = sessions[session_id].get('signature_formateur') is not None
+    signe = session.get('signature_formateur') is not None
     return jsonify({'signe': signe, 'session_id': session_id})
 
 @app.route('/telecharger-pdf-final/<session_id>', methods=['GET'])
 def telecharger_pdf_final(session_id):
-    """
-    NOUVELLE ROUTE : génère et retourne directement le PDF binaire
-    avec les vraies signatures (stagiaires + formateur) dessinées dedans.
-    Make.com peut directement attacher cette réponse en pièce jointe Outlook.
-    """
-    if session_id not in sessions:
+    session = load_session(session_id)
+    if not session:
         return jsonify({'error': 'Session introuvable'}), 404
 
-    session = sessions[session_id]
     sig_formateur = session.get('signature_formateur')
-
     if not sig_formateur:
         return jsonify({'error': 'Formateur pas encore signé'}), 400
 
