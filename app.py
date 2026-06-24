@@ -2,8 +2,8 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from PIL import Image
 import base64, io, os, json, uuid, time
 
@@ -56,7 +56,6 @@ def b64_to_image(b64_str):
     return Image.open(io.BytesIO(img_data)).convert('RGBA')
 
 def dessiner_signature(c, b64_str, x, y, w, h):
-    """Dessine une signature base64 sur le canvas PDF."""
     try:
         sig_img = b64_to_image(b64_str)
         if sig_img:
@@ -74,173 +73,200 @@ def dessiner_signature(c, b64_str, x, y, w, h):
 def generer_pdf(data, sig_formateur=None, session_id=None):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-    
-    mL, mR, mT = 15*mm, 15*mm, 12*mm
+
+    mL, mR, mT = 18*mm, 18*mm, 15*mm
     cW = W - mL - mR
 
-    # HEADER
-    c.setFont("Helvetica-Bold", 16)
-    c.drawCentredString(W/2, H - mT - 12*mm, "Feuille de présence")
+    # ===== HEADER =====
+    # Cadre header
+    c.setStrokeColorRGB(0.1, 0.23, 0.36)
+    c.setFillColorRGB(0.1, 0.23, 0.36)
+    c.rect(mL, H - mT - 22*mm, cW, 22*mm, stroke=0, fill=1)
+
+    c.setFillColorRGB(1, 1, 1)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(mL + 5*mm, H - mT - 14*mm, "PRÉVAMCEO")
+    c.setFont("Helvetica", 9)
+    c.drawString(mL + 5*mm, H - mT - 20*mm, "Feuille de présence numérique")
+
     c.setFont("Helvetica", 8)
-    c.drawRightString(W - mR, H - mT - 6*mm, "Enregistrement EQ003")
-    c.drawRightString(W - mR, H - mT - 10*mm, "Version 2")
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(mL, H - mT - 6*mm, "PRÉVAMCEO")
+    c.drawRightString(W - mR - 5*mm, H - mT - 10*mm, "Enregistrement EQ003")
+    c.drawRightString(W - mR - 5*mm, H - mT - 16*mm, "Version 2")
+
+    # ===== INFOS FORMATION =====
+    y = H - mT - 28*mm
+
+    # Ligne de séparation
+    c.setStrokeColorRGB(0.88, 0.89, 0.91)
     c.setLineWidth(0.5)
-    c.rect(mL, H - mT - 28*mm, cW, 28*mm, stroke=1, fill=0)
 
-    # TABLE INFOS
-    y = H - mT - 28*mm - 16*mm
-    col4 = cW / 4
-    headers1 = ['Client', 'Titre de la formation', 'Session n°', 'Dates de formation']
-    vals1 = [data.get('entreprise','—'), data.get('titre','—'), data.get('session','—'), data.get('date','—')]
-    for i in range(4):
-        c.setFillColorRGB(0.9, 0.9, 0.9)
-        c.rect(mL + i*col4, y + 8*mm, col4, 7*mm, stroke=1, fill=1)
-        c.setFillColorRGB(0,0,0)
+    def info_ligne(label, valeur, yp):
+        c.setFillColorRGB(0.4, 0.4, 0.4)
         c.setFont("Helvetica-Bold", 8)
-        c.drawCentredString(mL + i*col4 + col4/2, y + 11*mm, headers1[i])
-        c.setFillColorRGB(1,1,1)
-        c.rect(mL + i*col4, y, col4, 8*mm, stroke=1, fill=1)
-        c.setFillColorRGB(0,0,0)
-        c.setFont("Helvetica", 8)
-        c.drawCentredString(mL + i*col4 + col4/2, y + 3*mm, str(vals1[i])[:22])
+        c.drawString(mL, yp, label.upper())
+        c.setFillColorRGB(0.1, 0.1, 0.1)
+        c.setFont("Helvetica", 10)
+        c.drawString(mL + 38*mm, yp, str(valeur) if valeur else '—')
+        c.setStrokeColorRGB(0.88, 0.89, 0.91)
+        c.setLineWidth(0.3)
+        c.line(mL, yp - 1.5*mm, W - mR, yp - 1.5*mm)
 
-    y -= 18*mm
-    col3 = [cW*0.35, cW*0.30, cW*0.35]
-    headers2 = ['Adresse de la formation', 'Horaires', 'Formateur']
-    vals2 = [data.get('adresse','—'), data.get('horaires','—'), data.get('formateur','—')]
-    x = mL
-    for i in range(3):
-        c.setFillColorRGB(0.9,0.9,0.9)
-        c.rect(x, y+8*mm, col3[i], 7*mm, stroke=1, fill=1)
-        c.setFillColorRGB(0,0,0)
-        c.setFont("Helvetica-Bold", 8)
-        c.drawCentredString(x+col3[i]/2, y+11*mm, headers2[i])
-        c.setFillColorRGB(1,1,1)
-        c.rect(x, y, col3[i], 8*mm, stroke=1, fill=1)
-        c.setFillColorRGB(0,0,0)
-        c.setFont("Helvetica", 8)
-        c.drawCentredString(x+col3[i]/2, y+3.5*mm, str(vals2[i])[:25])
-        x += col3[i]
+    info_ligne("Formation", data.get('titre',''), y);            y -= 8*mm
+    info_ligne("Client",    data.get('entreprise',''), y);       y -= 8*mm
+    info_ligne("Session n°", data.get('session',''), y);         y -= 8*mm
+    info_ligne("Date",      data.get('date',''), y);             y -= 8*mm
+    info_ligne("Horaires",  data.get('horaires',''), y);         y -= 8*mm
+    info_ligne("Lieu",      data.get('lieu', data.get('adresse','')), y); y -= 8*mm
+    info_ligne("Formateur", data.get('formateur',''), y);        y -= 12*mm
 
-    # TABLEAU EMARGEMENT
+    # ===== TITRE SECTION EMARGEMENT =====
+    c.setFillColorRGB(0.1, 0.23, 0.36)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(mL, y, "Émargement des apprenants")
+    c.setLineWidth(1)
+    c.setStrokeColorRGB(0.1, 0.23, 0.36)
+    c.line(mL, y - 2*mm, W - mR, y - 2*mm)
     y -= 8*mm
-    colN = cW * 0.28
-    colS = cW * 0.36
-    rowH = 14*mm
 
-    c.setFillColorRGB(0.92,0.92,0.92)
-    c.rect(mL, y, colN, 18*mm, stroke=1, fill=1)
-    c.rect(mL+colN, y, colS*2, 18*mm, stroke=1, fill=1)
-    c.setFillColorRGB(0,0,0)
-    c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(mL+colN/2, y+13*mm, "Émargement des apprenants")
-    c.setFont("Helvetica", 7)
-    c.drawCentredString(mL+colN/2, y+10*mm, "Nom et Prénom")
-    c.setFont("Helvetica-Bold", 9)
-    c.drawCentredString(mL+colN+colS, y+13*mm, str(data.get('date','')))
-    c.drawCentredString(mL+colN+colS/2, y+8*mm, "Signature")
-    c.setFont("Helvetica", 7)
-    c.drawCentredString(mL+colN+colS+colS/2, y+8*mm, "Formateur")
-    c.line(mL+colN+colS, y, mL+colN+colS, y+18*mm)
-
-    y -= rowH
+    # ===== LISTE PARTICIPANTS =====
     participants = data.get('participants', [])
+    sig_h = 18*mm   # hauteur bloc signature
+    nom_col = 70*mm  # largeur colonne nom
+
     for i, p in enumerate(participants):
         nom = p.get('nom','').strip()
         prenom = p.get('prenom','').strip()
         if not nom and not prenom:
             continue
-        
-        fill = 0.97 if i%2==0 else 1.0
-        c.setFillColorRGB(fill,fill,fill)
-        c.rect(mL, y, colN, rowH, stroke=1, fill=1)
-        c.setFillColorRGB(1,1,1)
-        c.rect(mL+colN, y, colS, rowH, stroke=1, fill=1)
-        c.rect(mL+colN+colS, y, colS, rowH, stroke=1, fill=1)
-        c.setFillColorRGB(0,0,0)
-        c.setFont("Helvetica", 9)
-        c.drawString(mL+2*mm, y+5*mm, f"{prenom} {nom}".strip())
 
-        # Chercher signature dans fichier dédié (stockée directement par index.html)
+        # Vérifier espace restant
+        if y - sig_h - 5*mm < 35*mm:
+            c.showPage()
+            y = H - mT - 15*mm
+
+        # Fond alterné léger
+        if i % 2 == 0:
+            c.setFillColorRGB(0.97, 0.98, 1.0)
+            c.rect(mL - 2*mm, y - sig_h + 2*mm, cW + 4*mm, sig_h, stroke=0, fill=1)
+
+        # Numéro
+        c.setFillColorRGB(0.1, 0.23, 0.36)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(mL, y - 3*mm, f"{i+1}.")
+
+        # Nom Prénom
+        c.setFillColorRGB(0.1, 0.1, 0.1)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(mL + 8*mm, y - 3*mm, f"{prenom} {nom}".strip())
+
+        # Entreprise
+        entreprise = p.get('entreprise','').strip()
+        if entreprise:
+            c.setFillColorRGB(0.5, 0.5, 0.5)
+            c.setFont("Helvetica", 8)
+            c.drawString(mL + 8*mm, y - 9*mm, entreprise)
+
+        # Label signature
+        c.setFillColorRGB(0.4, 0.4, 0.4)
+        c.setFont("Helvetica", 7)
+        c.drawString(mL + nom_col, y - 3*mm, "SIGNATURE")
+
+        # Cadre signature
+        sig_x = mL + nom_col
+        sig_w = cW - nom_col
+        c.setStrokeColorRGB(0.7, 0.7, 0.7)
+        c.setLineWidth(0.5)
+        c.roundRect(sig_x, y - sig_h + 3*mm, sig_w, sig_h - 6*mm, 3*mm, stroke=1, fill=0)
+
+        # Chercher signature
         sig_b64 = None
         if session_id:
             sig_b64 = load_signature(session_id, nom, prenom)
-        
-        # Fallback: signature dans les données JSON (tronquée)
         if not sig_b64:
             sig_b64 = p.get('signature', '')
 
         if sig_b64 and len(sig_b64) > 100:
             ok = dessiner_signature(c, sig_b64,
-                mL+colN+1*mm, y+1*mm,
-                colS-2*mm, rowH-2*mm)
+                sig_x + 2*mm, y - sig_h + 5*mm,
+                sig_w - 4*mm, sig_h - 10*mm)
             if not ok:
-                c.setFont("Helvetica", 7)
-                c.setFillColorRGB(0.5,0.5,0.5)
-                c.drawCentredString(mL+colN+colS/2, y+5*mm, "Erreur signature")
-                c.setFillColorRGB(0,0,0)
+                c.setFillColorRGB(0.5, 0.5, 0.5)
+                c.setFont("Helvetica", 8)
+                c.drawCentredString(sig_x + sig_w/2, y - sig_h/2, "Erreur signature")
         else:
-            c.setFont("Helvetica", 7)
-            c.setFillColorRGB(0.7,0.7,0.7)
-            c.drawCentredString(mL+colN+colS/2, y+5*mm, "—")
-            c.setFillColorRGB(0,0,0)
+            c.setFillColorRGB(0.75, 0.75, 0.75)
+            c.setFont("Helvetica", 8)
+            c.drawCentredString(sig_x + sig_w/2, y - sig_h/2 + 2*mm, "—")
 
-        y -= rowH
+        # Ligne séparatrice
+        c.setStrokeColorRGB(0.88, 0.88, 0.88)
+        c.setLineWidth(0.3)
+        c.line(mL, y - sig_h + 1*mm, W - mR, y - sig_h + 1*mm)
 
-    # FORMATEUR
-    c.setFillColorRGB(0.92,0.92,0.92)
-    c.rect(mL, y, colN, 20*mm, stroke=1, fill=1)
-    c.setFillColorRGB(1,1,1)
-    c.rect(mL+colN, y, colS, 20*mm, stroke=1, fill=1)
-    c.rect(mL+colN+colS, y, colS, 20*mm, stroke=1, fill=1)
-    c.setFillColorRGB(0,0,0)
-    c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(mL+colN/2, y+15*mm, "Formateur")
-    c.setFont("Helvetica", 9)
-    c.drawCentredString(mL+colN/2, y+10*mm, str(data.get('formateur',''))[:22])
-    c.setFont("Helvetica", 7)
-    c.drawCentredString(mL+colN/2, y+5*mm, "(atteste avoir animé la formation)")
+        y -= sig_h + 2*mm
 
-    # SIGNATURE FORMATEUR
+    # ===== SECTION FORMATEUR =====
+    if y - sig_h - 15*mm < 30*mm:
+        c.showPage()
+        y = H - mT - 15*mm
+
+    y -= 8*mm
+    c.setFillColorRGB(0.1, 0.23, 0.36)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(mL, y, "Signature du formateur")
+    c.setLineWidth(1)
+    c.setStrokeColorRGB(0.1, 0.23, 0.36)
+    c.line(mL, y - 2*mm, W - mR, y - 2*mm)
+    y -= 8*mm
+
+    # Nom formateur
+    c.setFillColorRGB(0.1, 0.1, 0.1)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(mL, y - 3*mm, data.get('formateur',''))
+    c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.setFont("Helvetica", 8)
+    c.drawString(mL, y - 9*mm, "Par cette signature j'atteste avoir animé la formation ci-dessus")
+
+    # Cadre signature formateur
+    sig_x = mL + nom_col
+    sig_w = cW - nom_col
+    sig_h_f = 22*mm
+    c.setStrokeColorRGB(0.1, 0.23, 0.36)
+    c.setLineWidth(0.8)
+    c.roundRect(sig_x, y - sig_h_f + 2*mm, sig_w, sig_h_f - 2*mm, 3*mm, stroke=1, fill=0)
+
     if sig_formateur and len(sig_formateur) > 100:
         dessiner_signature(c, sig_formateur,
-            mL+colN+colS+1*mm, y+1*mm,
-            colS-2*mm, 18*mm)
+            sig_x + 2*mm, y - sig_h_f + 4*mm,
+            sig_w - 4*mm, sig_h_f - 8*mm)
 
-
-    # FOOTER
+    # ===== FOOTER =====
     c.setFont("Helvetica", 6)
-    c.setFillColorRGB(0.3,0.3,0.3)
-    fY = 18*mm
-    c.drawCentredString(W/2, fY, "Les informations recueillies sont enregistrées dans un fichier informatisé par PREVAMCEO.")
-    c.drawCentredString(W/2, fY-3.5*mm, "Conformément à la loi « informatique et libertés » — jparnaud@prevamceo.fr")
-    c.drawCentredString(W/2, fY-7*mm, "Prévamcéo - 11 B allée de la Falaise - 13820 Ensuès-la-Redonne – 06 08 13 92 57")
+    c.setFillColorRGB(0.5, 0.5, 0.5)
+    fY = 12*mm
+    c.line(mL, fY + 5*mm, W - mR, fY + 5*mm)
+    c.drawCentredString(W/2, fY + 2*mm, "Les informations recueillies sont enregistrées dans un fichier informatisé par PREVAMCEO — jparnaud@prevamceo.fr")
+    c.drawCentredString(W/2, fY - 1.5*mm, "Prévamcéo - 11 B allée de la Falaise - 13820 Ensuès-la-Redonne – 06 08 13 92 57 – contact@prevamceo.fr – Siret 939 109 252 00014")
 
     c.save()
     buffer.seek(0)
     return buffer
 
+# ===== ROUTES =====
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v4 - signatures directes'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v4 - liste signatures'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
-    """
-    Reçoit la signature directement depuis index.html (bypass Make.com).
-    Body JSON: { session_id, nom, prenom, signature }
-    """
     body = request.json
     session_id = body.get('session_id')
     nom = body.get('nom','').strip()
     prenom = body.get('prenom','').strip()
     signature = body.get('signature','')
-
     if not session_id or not signature:
         return jsonify({'success': False, 'error': 'Données manquantes'}), 400
-
     save_signature(session_id, nom, prenom, signature)
     return jsonify({'success': True, 'message': f'Signature de {prenom} {nom} stockée'})
 
