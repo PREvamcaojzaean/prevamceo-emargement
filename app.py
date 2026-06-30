@@ -21,8 +21,7 @@ def get_session_path(session_id):
 
 def normaliser(texte):
     """Normalise un nom/prénom pour comparaison fiable :
-    minuscules, espaces en trop supprimés. Évite les ratés de
-    correspondance entre 'Jean Dupont' et 'JEAN DUPONT' par exemple."""
+    minuscules, espaces en trop supprimés."""
     return (texte or '').strip().lower().replace('  ', ' ')
 
 def get_sig_path(session_id, nom, prenom):
@@ -42,8 +41,6 @@ def save_session(session_id, data):
         json.dump(data, f)
 
 def load_signature(session_id, nom, prenom):
-    """Charge UNIQUEMENT la signature stockée pour ce session_id précis.
-    Pas de fallback vers d'autres sources — évite tout mélange entre formations."""
     path = get_sig_path(session_id, nom, prenom)
     if not os.path.exists(path):
         return None
@@ -53,7 +50,48 @@ def load_signature(session_id, nom, prenom):
 def save_signature(session_id, nom, prenom, signature):
     path = get_sig_path(session_id, nom, prenom)
     with open(path, 'w') as f:
-        json.dump({'signature': signature}, f)
+        json.dump({'signature': signature, 'nom': nom, 'prenom': prenom, 'horodatage': time.time()}, f)
+
+def get_participants_reels(session_id):
+    """
+    SOURCE UNIQUE DE VÉRITÉ pour la liste des participants.
+    Ne dépend JAMAIS du tableau 'participants' envoyé à la création
+    de session (qui est toujours vide puisque les stagiaires n'ont
+    pas encore signé à ce moment-là). À la place, on lit directement
+    tous les fichiers de signature réellement présents sur disque
+    pour ce session_id — c'est la seule source fiable.
+    """
+    participants = []
+    if not os.path.exists(SIGNATURES_DIR):
+        return participants
+    prefix = session_id + '_'
+    for fname in sorted(os.listdir(SIGNATURES_DIR)):
+        if not fname.startswith(prefix) or not fname.endswith('.json'):
+            continue
+        path = os.path.join(SIGNATURES_DIR, fname)
+        try:
+            with open(path, 'r') as f:
+                content = json.load(f)
+            nom = content.get('nom', '')
+            prenom = content.get('prenom', '')
+            signature = content.get('signature', '')
+            if not nom and not prenom:
+                # Ancien format de fichier sans nom/prenom stockés —
+                # on les reconstruit depuis le nom de fichier en secours.
+                reste = fname[len(prefix):-5]
+                parts = reste.split('_')
+                if len(parts) >= 2:
+                    nom = parts[0]
+                    prenom = '_'.join(parts[1:])
+            participants.append({
+                'nom': nom,
+                'prenom': prenom,
+                'signature': signature,
+                'horodatage': content.get('horodatage')
+            })
+        except Exception as e:
+            print(f"Erreur lecture {fname}: {e}")
+    return participants
 
 def b64_to_image(b64_str):
     if not b64_str:
@@ -79,6 +117,11 @@ def dessiner_signature(c, b64_str, x, y, w, h):
     return False
 
 def generer_pdf(data, sig_formateur=None, session_id=None):
+    """
+    Génère le PDF. Les participants viennent EXCLUSIVEMENT de
+    get_participants_reels() — jamais du tableau data['participants']
+    qui est structurellement toujours vide à la création de session.
+    """
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
 
@@ -134,10 +177,16 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
     c.line(mL, y - 2*mm, W - mR, y - 2*mm)
     y -= 8*mm
 
-    # ===== LISTE PARTICIPANTS =====
-    participants = data.get('participants', [])
+    # ===== LISTE PARTICIPANTS — SOURCE UNIQUE : fichiers réels sur disque =====
+    participants = get_participants_reels(session_id) if session_id else []
     sig_h = 18*mm
     nom_col = 70*mm
+
+    if not participants:
+        c.setFillColorRGB(0.6, 0.6, 0.6)
+        c.setFont("Helvetica-Oblique", 10)
+        c.drawString(mL, y - 5*mm, "Aucun apprenant n'a signé pour cette session.")
+        y -= 15*mm
 
     for i, p in enumerate(participants):
         nom = p.get('nom','').strip()
@@ -161,12 +210,6 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
         c.setFont("Helvetica-Bold", 11)
         c.drawString(mL + 8*mm, y - 3*mm, f"{prenom} {nom}".strip())
 
-        entreprise = p.get('entreprise','').strip()
-        if entreprise:
-            c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.setFont("Helvetica", 8)
-            c.drawString(mL + 8*mm, y - 9*mm, entreprise)
-
         c.setFillColorRGB(0.4, 0.4, 0.4)
         c.setFont("Helvetica", 7)
         c.drawString(mL + nom_col, y - 3*mm, "SIGNATURE")
@@ -177,12 +220,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
         c.setLineWidth(0.5)
         c.roundRect(sig_x, y - sig_h + 3*mm, sig_w, sig_h - 6*mm, 3*mm, stroke=1, fill=0)
 
-        # ===== CHERCHER SIGNATURE — UNIQUEMENT depuis ce session_id =====
-        # Plus de fallback vers p.get('signature') qui pouvait contenir
-        # une ancienne donnée provenant du Sheets / Array Aggregator.
-        sig_b64 = None
-        if session_id:
-            sig_b64 = load_signature(session_id, nom, prenom)
+        sig_b64 = p.get('signature', '')
 
         if sig_b64 and len(sig_b64) > 100:
             ok = dessiner_signature(c, sig_b64,
@@ -252,7 +290,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v8 - route debug'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v9 - source unique fichiers'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
@@ -268,6 +306,13 @@ def stocker_signature():
 
 @app.route('/creer-session', methods=['POST'])
 def creer_session():
+    """
+    Crée une session avec les infos de FORMATION uniquement
+    (titre, date, lieu, formateur...). Le tableau 'participants'
+    envoyé ici est volontairement IGNORÉ pour la suite — il sera
+    toujours vide à ce stade puisque personne n'a encore signé.
+    La vraie liste se construit dynamiquement via /stocker-signature.
+    """
     data = request.json
     session_id = str(uuid.uuid4())[:8]
     save_session(session_id, {
@@ -293,37 +338,14 @@ def page_signature(session_id):
     formation = data.get('titre', 'Formation')
     date = data.get('date', '')
 
-    participants_prevus = data.get('participants', [])
-    participants_signes = []
-    for p in participants_prevus:
-        nom = p.get('nom', '').strip()
-        prenom = p.get('prenom', '').strip()
-        if not nom and not prenom:
-            continue
-        sig = load_signature(session_id, nom, prenom)
-        participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': bool(sig)})
-
-    dejavu = {(p['nom'], p['prenom']) for p in participants_signes}
-    if os.path.exists(SIGNATURES_DIR):
-        for fname in os.listdir(SIGNATURES_DIR):
-            if not fname.startswith(session_id + '_'):
-                continue
-            reste = fname[len(session_id) + 1:-5]
-            parts = reste.split('_')
-            if len(parts) >= 2:
-                nom_f = parts[0]
-                prenom_f = '_'.join(parts[1:])
-                if (nom_f, prenom_f) not in dejavu:
-                    participants_signes.append({'nom': nom_f, 'prenom': prenom_f, 'signe': True})
-
-    participants = participants_signes
+    # SOURCE UNIQUE : fichiers réels sur disque
+    participants = get_participants_reels(session_id)
     liste_html = ''.join([
-        f"<div class='participant'>{'✅' if p['signe'] else '⏳'} {p.get('prenom','')} {p.get('nom','')}</div>"
+        f"<div class='participant'>✅ {p.get('prenom','')} {p.get('nom','')}</div>"
         for p in participants
     ])
-    nb_signes = len([p for p in participants if p['signe']])
     nb_total = len(participants)
-    nb = nb_total
+
     return f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -340,6 +362,7 @@ body {{ font-family: -apple-system, sans-serif; background: #f4f6f9; padding-bot
 .card h2 {{ font-size: 14px; font-weight: 600; color: #1a3a5c; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; }}
 .info {{ font-size: 13px; color: #555; margin-bottom: 6px; }}
 .participant {{ font-size: 13px; color: #1a6b4a; padding: 6px 0; border-bottom: 1px solid #f0f0f0; }}
+.empty {{ font-size: 13px; color: #999; font-style: italic; padding: 10px 0; }}
 .sig-wrap {{ border: 1.5px solid #ddd; border-radius: 10px; background: #fafafa; position: relative; overflow: hidden; }}
 canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-action: none; }}
 .sig-hint {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 13px; color: #bbb; pointer-events: none; }}
@@ -351,6 +374,7 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
 .success .icon {{ font-size: 60px; margin-bottom: 16px; }}
 .success h2 {{ color: #1a6b4a; font-size: 20px; }}
 .msg {{ padding: 12px; border-radius: 8px; font-size: 13px; display: none; margin-bottom: 12px; background: #fff0f0; color: #a32d2d; }}
+.refresh-btn {{ font-size: 12px; color: #1a3a5c; background: #e8f0fa; border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer; margin-bottom: 12px; }}
 </style>
 </head>
 <body>
@@ -364,8 +388,9 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
   <div class="info">👤 Formateur : <strong>{formateur}</strong></div>
   <div class="info">📅 Date : <strong>{date}</strong></div>
   <br>
-  <h2>Participants — {nb_signes} signé(s) sur {nb_total}</h2>
-  {liste_html}
+  <h2>Participants ayant signé ({nb_total})</h2>
+  <button class="refresh-btn" onclick="window.location.reload()">🔄 Actualiser la liste</button>
+  {liste_html if participants else '<div class="empty">Aucun apprenant n a encore signe. Actualisez la page une fois qu ils ont scanne le QR code.</div>'}
   <br>
   <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Votre signature *</div>
   <div class="sig-wrap">
@@ -475,52 +500,17 @@ def telecharger_pdf_final(session_id):
 
 @app.route('/debug/<session_id>', methods=['GET'])
 def debug_session(session_id):
-    """
-    Route de diagnostic — montre exactement :
-    1. La liste des participants attendus (depuis le Sheets/Make)
-    2. Le chemin de fichier exact que le serveur cherche pour chacun
-    3. Si ce fichier existe réellement sur disque
-    4. La liste RÉELLE de tous les fichiers de signature présents
-    Permet de voir immédiatement où est le décalage de nom, sans deviner.
-    """
     session = load_session(session_id)
-    if not session:
-        return jsonify({'error': 'Session introuvable', 'session_id': session_id}), 404
-
-    data = session['data']
-    participants = data.get('participants', [])
-
-    diagnostic_participants = []
-    for p in participants:
-        nom = p.get('nom', '')
-        prenom = p.get('prenom', '')
-        if not nom.strip() and not prenom.strip():
-            continue
-        chemin_attendu = get_sig_path(session_id, nom, prenom)
-        existe = os.path.exists(chemin_attendu)
-        diagnostic_participants.append({
-            'nom_brut': nom,
-            'prenom_brut': prenom,
-            'nom_normalise': normaliser(nom),
-            'prenom_normalise': normaliser(prenom),
-            'chemin_fichier_attendu': os.path.basename(chemin_attendu),
-            'fichier_existe': existe
-        })
-
-    # Liste réelle de TOUS les fichiers de signature sur disque pour cette session
-    fichiers_reels = []
-    if os.path.exists(SIGNATURES_DIR):
-        for fname in os.listdir(SIGNATURES_DIR):
-            if fname.startswith(session_id + '_'):
-                fichiers_reels.append(fname)
-
+    participants_reels = get_participants_reels(session_id)
     return jsonify({
         'session_id': session_id,
-        'formateur_a_signe': session.get('signature_formateur') is not None,
-        'participants_attendus_avec_diagnostic': diagnostic_participants,
-        'fichiers_signature_reellement_presents_sur_disque': fichiers_reels,
-        'nombre_participants_attendus': len(diagnostic_participants),
-        'nombre_fichiers_trouves': len(fichiers_reels)
+        'session_existe': session is not None,
+        'formateur_a_signe': session.get('signature_formateur') is not None if session else False,
+        'participants_reellement_signes': [
+            {'nom': p['nom'], 'prenom': p['prenom'], 'a_une_signature': bool(p.get('signature'))}
+            for p in participants_reels
+        ],
+        'nombre_participants_signes': len(participants_reels)
     })
 
 if __name__ == '__main__':
