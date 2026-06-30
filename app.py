@@ -19,8 +19,14 @@ os.makedirs(SIGNATURES_DIR, exist_ok=True)
 def get_session_path(session_id):
     return os.path.join(SESSIONS_DIR, f'{session_id}.json')
 
+def normaliser(texte):
+    """Normalise un nom/prénom pour comparaison fiable :
+    minuscules, espaces en trop supprimés. Évite les ratés de
+    correspondance entre 'Jean Dupont' et 'JEAN DUPONT' par exemple."""
+    return (texte or '').strip().lower().replace('  ', ' ')
+
 def get_sig_path(session_id, nom, prenom):
-    key = f"{session_id}_{nom}_{prenom}".replace(' ', '_')
+    key = f"{session_id}_{normaliser(nom)}_{normaliser(prenom)}".replace(' ', '_')
     return os.path.join(SIGNATURES_DIR, f'{key}.json')
 
 def load_session(session_id):
@@ -246,7 +252,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v6 - sans fallback signature'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v7 - normalisation noms'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
