@@ -252,7 +252,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v7 - normalisation noms'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v8 - route debug'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
@@ -472,6 +472,56 @@ def telecharger_pdf_final(session_id):
         )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/debug/<session_id>', methods=['GET'])
+def debug_session(session_id):
+    """
+    Route de diagnostic — montre exactement :
+    1. La liste des participants attendus (depuis le Sheets/Make)
+    2. Le chemin de fichier exact que le serveur cherche pour chacun
+    3. Si ce fichier existe réellement sur disque
+    4. La liste RÉELLE de tous les fichiers de signature présents
+    Permet de voir immédiatement où est le décalage de nom, sans deviner.
+    """
+    session = load_session(session_id)
+    if not session:
+        return jsonify({'error': 'Session introuvable', 'session_id': session_id}), 404
+
+    data = session['data']
+    participants = data.get('participants', [])
+
+    diagnostic_participants = []
+    for p in participants:
+        nom = p.get('nom', '')
+        prenom = p.get('prenom', '')
+        if not nom.strip() and not prenom.strip():
+            continue
+        chemin_attendu = get_sig_path(session_id, nom, prenom)
+        existe = os.path.exists(chemin_attendu)
+        diagnostic_participants.append({
+            'nom_brut': nom,
+            'prenom_brut': prenom,
+            'nom_normalise': normaliser(nom),
+            'prenom_normalise': normaliser(prenom),
+            'chemin_fichier_attendu': os.path.basename(chemin_attendu),
+            'fichier_existe': existe
+        })
+
+    # Liste réelle de TOUS les fichiers de signature sur disque pour cette session
+    fichiers_reels = []
+    if os.path.exists(SIGNATURES_DIR):
+        for fname in os.listdir(SIGNATURES_DIR):
+            if fname.startswith(session_id + '_'):
+                fichiers_reels.append(fname)
+
+    return jsonify({
+        'session_id': session_id,
+        'formateur_a_signe': session.get('signature_formateur') is not None,
+        'participants_attendus_avec_diagnostic': diagnostic_participants,
+        'fichiers_signature_reellement_presents_sur_disque': fichiers_reels,
+        'nombre_participants_attendus': len(diagnostic_participants),
+        'nombre_fichiers_trouves': len(fichiers_reels)
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
