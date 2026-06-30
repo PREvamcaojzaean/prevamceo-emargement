@@ -36,6 +36,8 @@ def save_session(session_id, data):
         json.dump(data, f)
 
 def load_signature(session_id, nom, prenom):
+    """Charge UNIQUEMENT la signature stockée pour ce session_id précis.
+    Pas de fallback vers d'autres sources — évite tout mélange entre formations."""
     path = get_sig_path(session_id, nom, prenom)
     if not os.path.exists(path):
         return None
@@ -78,7 +80,6 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
     cW = W - mL - mR
 
     # ===== HEADER =====
-    # Cadre header
     c.setStrokeColorRGB(0.1, 0.23, 0.36)
     c.setFillColorRGB(0.1, 0.23, 0.36)
     c.rect(mL, H - mT - 22*mm, cW, 22*mm, stroke=0, fill=1)
@@ -96,7 +97,6 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
     # ===== INFOS FORMATION =====
     y = H - mT - 28*mm
 
-    # Ligne de séparation
     c.setStrokeColorRGB(0.88, 0.89, 0.91)
     c.setLineWidth(0.5)
 
@@ -130,8 +130,8 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
     # ===== LISTE PARTICIPANTS =====
     participants = data.get('participants', [])
-    sig_h = 18*mm   # hauteur bloc signature
-    nom_col = 70*mm  # largeur colonne nom
+    sig_h = 18*mm
+    nom_col = 70*mm
 
     for i, p in enumerate(participants):
         nom = p.get('nom','').strip()
@@ -139,51 +139,44 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
         if not nom and not prenom:
             continue
 
-        # Vérifier espace restant
         if y - sig_h - 5*mm < 35*mm:
             c.showPage()
             y = H - mT - 15*mm
 
-        # Fond alterné léger
         if i % 2 == 0:
             c.setFillColorRGB(0.97, 0.98, 1.0)
             c.rect(mL - 2*mm, y - sig_h + 2*mm, cW + 4*mm, sig_h, stroke=0, fill=1)
 
-        # Numéro
         c.setFillColorRGB(0.1, 0.23, 0.36)
         c.setFont("Helvetica-Bold", 9)
         c.drawString(mL, y - 3*mm, f"{i+1}.")
 
-        # Nom Prénom
         c.setFillColorRGB(0.1, 0.1, 0.1)
         c.setFont("Helvetica-Bold", 11)
         c.drawString(mL + 8*mm, y - 3*mm, f"{prenom} {nom}".strip())
 
-        # Entreprise
         entreprise = p.get('entreprise','').strip()
         if entreprise:
             c.setFillColorRGB(0.5, 0.5, 0.5)
             c.setFont("Helvetica", 8)
             c.drawString(mL + 8*mm, y - 9*mm, entreprise)
 
-        # Label signature
         c.setFillColorRGB(0.4, 0.4, 0.4)
         c.setFont("Helvetica", 7)
         c.drawString(mL + nom_col, y - 3*mm, "SIGNATURE")
 
-        # Cadre signature
         sig_x = mL + nom_col
         sig_w = cW - nom_col
         c.setStrokeColorRGB(0.7, 0.7, 0.7)
         c.setLineWidth(0.5)
         c.roundRect(sig_x, y - sig_h + 3*mm, sig_w, sig_h - 6*mm, 3*mm, stroke=1, fill=0)
 
-        # Chercher signature
+        # ===== CHERCHER SIGNATURE — UNIQUEMENT depuis ce session_id =====
+        # Plus de fallback vers p.get('signature') qui pouvait contenir
+        # une ancienne donnée provenant du Sheets / Array Aggregator.
         sig_b64 = None
         if session_id:
             sig_b64 = load_signature(session_id, nom, prenom)
-        if not sig_b64:
-            sig_b64 = p.get('signature', '')
 
         if sig_b64 and len(sig_b64) > 100:
             ok = dessiner_signature(c, sig_b64,
@@ -196,9 +189,8 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
         else:
             c.setFillColorRGB(0.75, 0.75, 0.75)
             c.setFont("Helvetica", 8)
-            c.drawCentredString(sig_x + sig_w/2, y - sig_h/2 + 2*mm, "—")
+            c.drawCentredString(sig_x + sig_w/2, y - sig_h/2 + 2*mm, "Non signé")
 
-        # Ligne séparatrice
         c.setStrokeColorRGB(0.88, 0.88, 0.88)
         c.setLineWidth(0.3)
         c.line(mL, y - sig_h + 1*mm, W - mR, y - sig_h + 1*mm)
@@ -219,7 +211,6 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
     c.line(mL, y - 2*mm, W - mR, y - 2*mm)
     y -= 8*mm
 
-    # Nom formateur
     c.setFillColorRGB(0.1, 0.1, 0.1)
     c.setFont("Helvetica-Bold", 11)
     c.drawString(mL, y - 3*mm, data.get('formateur',''))
@@ -227,7 +218,6 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
     c.setFont("Helvetica", 8)
     c.drawString(mL, y - 9*mm, "Par cette signature j'atteste avoir animé la formation ci-dessus")
 
-    # Cadre signature formateur
     sig_x = mL + nom_col
     sig_w = cW - nom_col
     sig_h_f = 22*mm
@@ -256,7 +246,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v5 - temps reel'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v6 - sans fallback signature'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
@@ -297,10 +287,6 @@ def page_signature(session_id):
     formation = data.get('titre', 'Formation')
     date = data.get('date', '')
 
-    # ===== RECHARGEMENT EN TEMPS RÉEL =====
-    # On vérifie pour chaque participant prévu s'il a réellement signé
-    # en cherchant son fichier de signature sur disque (mis à jour à
-    # chaque fois qu'un stagiaire valide depuis index.html).
     participants_prevus = data.get('participants', [])
     participants_signes = []
     for p in participants_prevus:
@@ -309,20 +295,14 @@ def page_signature(session_id):
         if not nom and not prenom:
             continue
         sig = load_signature(session_id, nom, prenom)
-        if sig:
-            participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': True})
-        else:
-            participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': False})
+        participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': bool(sig)})
 
-    # Inclut aussi les stagiaires qui ont signé mais qui n'étaient pas
-    # dans la liste initiale (ex: ajoutés après coup, ou Sheets différent).
     dejavu = {(p['nom'], p['prenom']) for p in participants_signes}
     if os.path.exists(SIGNATURES_DIR):
         for fname in os.listdir(SIGNATURES_DIR):
             if not fname.startswith(session_id + '_'):
                 continue
-            # fname format: {session_id}_{nom}_{prenom}.json
-            reste = fname[len(session_id) + 1:-5]  # enlève préfixe + ".json"
+            reste = fname[len(session_id) + 1:-5]
             parts = reste.split('_')
             if len(parts) >= 2:
                 nom_f = parts[0]
