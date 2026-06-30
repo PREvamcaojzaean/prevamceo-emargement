@@ -256,7 +256,7 @@ def generer_pdf(data, sig_formateur=None, session_id=None):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v4 - liste signatures'})
+    return jsonify({'status': 'ok', 'service': 'Prevamceo Emargement v5 - temps reel'})
 
 @app.route('/stocker-signature', methods=['POST'])
 def stocker_signature():
@@ -296,12 +296,48 @@ def page_signature(session_id):
     formateur = data.get('formateur', 'Formateur')
     formation = data.get('titre', 'Formation')
     date = data.get('date', '')
-    participants = data.get('participants', [])
+
+    # ===== RECHARGEMENT EN TEMPS RÉEL =====
+    # On vérifie pour chaque participant prévu s'il a réellement signé
+    # en cherchant son fichier de signature sur disque (mis à jour à
+    # chaque fois qu'un stagiaire valide depuis index.html).
+    participants_prevus = data.get('participants', [])
+    participants_signes = []
+    for p in participants_prevus:
+        nom = p.get('nom', '').strip()
+        prenom = p.get('prenom', '').strip()
+        if not nom and not prenom:
+            continue
+        sig = load_signature(session_id, nom, prenom)
+        if sig:
+            participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': True})
+        else:
+            participants_signes.append({'nom': nom, 'prenom': prenom, 'signe': False})
+
+    # Inclut aussi les stagiaires qui ont signé mais qui n'étaient pas
+    # dans la liste initiale (ex: ajoutés après coup, ou Sheets différent).
+    dejavu = {(p['nom'], p['prenom']) for p in participants_signes}
+    if os.path.exists(SIGNATURES_DIR):
+        for fname in os.listdir(SIGNATURES_DIR):
+            if not fname.startswith(session_id + '_'):
+                continue
+            # fname format: {session_id}_{nom}_{prenom}.json
+            reste = fname[len(session_id) + 1:-5]  # enlève préfixe + ".json"
+            parts = reste.split('_')
+            if len(parts) >= 2:
+                nom_f = parts[0]
+                prenom_f = '_'.join(parts[1:])
+                if (nom_f, prenom_f) not in dejavu:
+                    participants_signes.append({'nom': nom_f, 'prenom': prenom_f, 'signe': True})
+
+    participants = participants_signes
     liste_html = ''.join([
-        f"<div class='participant'>✅ {p.get('prenom','')} {p.get('nom','')}</div>"
-        for p in participants if p.get('nom','').strip() or p.get('prenom','').strip()
+        f"<div class='participant'>{'✅' if p['signe'] else '⏳'} {p.get('prenom','')} {p.get('nom','')}</div>"
+        for p in participants
     ])
-    nb = len([p for p in participants if p.get('nom','').strip() or p.get('prenom','').strip()])
+    nb_signes = len([p for p in participants if p['signe']])
+    nb_total = len(participants)
+    nb = nb_total
     return f"""<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -342,7 +378,7 @@ canvas {{ display: block; width: 100%; height: 130px; cursor: crosshair; touch-a
   <div class="info">👤 Formateur : <strong>{formateur}</strong></div>
   <div class="info">📅 Date : <strong>{date}</strong></div>
   <br>
-  <h2>Participants ({nb})</h2>
+  <h2>Participants — {nb_signes} signé(s) sur {nb_total}</h2>
   {liste_html}
   <br>
   <div style="font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Votre signature *</div>
